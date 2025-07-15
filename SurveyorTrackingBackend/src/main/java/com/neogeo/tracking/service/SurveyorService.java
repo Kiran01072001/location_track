@@ -2,6 +2,8 @@ package com.neogeo.tracking.service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.time.Instant;
 
@@ -25,7 +27,32 @@ public class SurveyorService {
         return repository.findAll();
     }
 
+    /**
+     * Gets all surveyors with their online status
+     * @return List of surveyors with updated online status
+     */
+    public List<Surveyor> getAllSurveyorsWithStatus() {
+        List<Surveyor> surveyors = listAll();
+        for (Surveyor surveyor : surveyors) {
+            boolean isOnline = isSurveyorOnline(surveyor.getId());
+            surveyor.setOnline(isOnline);
+        }
+        return surveyors;
+    }
+
     public Surveyor save(Surveyor surveyor) {
+        return repository.save(surveyor);
+    }
+
+    /**
+     * Save or update a surveyor
+     * If the surveyor has an ID that exists, it will be updated, otherwise a new surveyor will be created
+     * @param surveyor The surveyor to save or update
+     * @return The saved or updated surveyor
+     */
+    public Surveyor saveOrUpdateSurveyor(Surveyor surveyor) {
+        // You can add additional logic here such as password hashing
+        // before saving the surveyor
         return repository.save(surveyor);
     }
 
@@ -37,15 +64,48 @@ public class SurveyorService {
     }
     
     public Surveyor findByUsername(String username) {
-        return repository.findByUsername(username);
+        return repository.findByUsername(username).orElse(null);
     }
     
     public boolean authenticateSurveyor(String username, String password) {
-        Surveyor surveyor = repository.findByUsername(username);
+        Surveyor surveyor = repository.findByUsername(username).orElse(null);
         if (surveyor != null) {
             return password.equals(surveyor.getPassword());
         }
         return false;
+    }
+
+    /**
+     * Authenticates a surveyor and returns a response with status and details
+     * @param username The username to authenticate
+     * @param password The password to verify
+     * @return A map containing authentication status, HTTP status code, and surveyor details if successful
+     */
+    public Map<String, Object> authenticateAndGetResponse(String username, String password) {
+        Map<String, Object> response = new HashMap<>();
+        Surveyor surveyor = repository.findByUsername(username).orElse(null);
+
+        if (surveyor == null) {
+            response.put("status", 404);
+            response.put("message", "Surveyor not found");
+            return response;
+        }
+
+        boolean authenticated = password.equals(surveyor.getPassword());
+
+        if (authenticated) {
+            response.put("status", 200);
+            response.put("authenticated", true);
+            response.put("surveyor", surveyor);
+            // Update the activity status when authenticated
+            updateSurveyorActivity(surveyor.getId());
+        } else {
+            response.put("status", 401);
+            response.put("authenticated", false);
+            response.put("message", "Invalid credentials");
+        }
+
+        return response;
     }
     
     public boolean isUsernameAvailable(String username) {

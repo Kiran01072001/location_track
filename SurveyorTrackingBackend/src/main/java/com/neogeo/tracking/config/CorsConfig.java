@@ -14,8 +14,18 @@ public class CorsConfig implements WebMvcConfigurer {
     
     @Override
     public void addCorsMappings(@NonNull CorsRegistry registry) {
-        // Define all allowed origins
-        String[] allowedOrigins = {
+        // Maintain exact same production origins
+        String[] allowedOrigins = getProductionOrigins();
+        
+        // Apply identical CORS mappings as in production
+        applyProductionCorsMappings(registry, allowedOrigins);
+        
+        System.out.println("*************CORS configuration updated in CorsConfig with all required origins");
+    }
+    
+    // Keep production origins exactly as they were
+    private String[] getProductionOrigins() {
+        return new String[] {
             // Local development
             "http://localhost:9898", 
             "http://localhost:3000",
@@ -28,10 +38,13 @@ public class CorsConfig implements WebMvcConfigurer {
             "http://183.82.114.29:6060",
             "http://183.82.114.29:6565",
             "http://183.82.114.29:3000",
-            // Allow file:// protocol for testing
+            // File protocol
             "file://"
         };
-        
+    }
+    
+    // Replicate the exact production CORS mappings
+    private void applyProductionCorsMappings(CorsRegistry registry, String[] allowedOrigins) {
         registry.addMapping("/api/**")
                 .allowedOrigins(allowedOrigins)
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
@@ -63,7 +76,11 @@ public class CorsConfig implements WebMvcConfigurer {
                 .exposedHeaders("Authorization")
                 .allowCredentials(false)
                 .maxAge(3600);
-                
-        System.out.println("*************CORS configuration updated in CorsConfig with all required origins");
+    }
+    
+    // Optional: Add method to check if we're in production
+    private boolean isProductionEnvironment() {
+        // Implement your environment detection logic here
+        return true; // Default to production for safety
     }
 }

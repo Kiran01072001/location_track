@@ -9,7 +9,7 @@
 # ----------------------------------------------
 
 # Backend API port
-BACKEND_PORT=6060
+BACKEND_PORT=6565
 
 # Frontend port
 FRONTEND_PORT=3000

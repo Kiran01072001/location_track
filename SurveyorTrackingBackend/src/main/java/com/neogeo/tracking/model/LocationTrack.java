@@ -1,43 +1,37 @@
+
 package com.neogeo.tracking.model;
 
-import java.time.LocalDateTime;
-
+import jakarta.persistence.*;
 import org.locationtech.jts.geom.Point;
-
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import java.time.Instant;
 
 @Entity
-@Table(name = "LocationTrack")
+@Table(name = "location_track", schema = "public") 
 public class LocationTrack {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "surveyorId", nullable = false, updatable = false, insertable = true)
+    @Column(name = "surveyor_id", nullable = false)
     private String surveyorId;
 
-    @Column(name = "latitude", nullable = false)
+    @Column(nullable = false)
     private double latitude;
 
-    @Column(name = "longitude", nullable = false)
+    @Column(nullable = false)
     private double longitude;
 
-    @Column(name = "timestamp", nullable = false)
-    private LocalDateTime timestamp;
+    @Column(nullable = false, columnDefinition = "TIMESTAMP WITH TIME ZONE")
+    private Instant timestamp;
 
-    @Column(name = "geom", columnDefinition = "geometry(Point, 4326)")
+    @Column(columnDefinition = "geometry(Point, 4326)")
     private Point geom;
 
     // Constructors
     public LocationTrack() {}
 
-    public LocationTrack(String surveyorId, double latitude, double longitude, LocalDateTime timestamp, Point geom) {
+    public LocationTrack(String surveyorId, double latitude, double longitude, Instant timestamp, Point geom) {
         this.surveyorId = surveyorId;
         this.latitude = latitude;
         this.longitude = longitude;
@@ -74,11 +68,11 @@ public class LocationTrack {
         this.longitude = longitude;
     }
 
-    public LocalDateTime getTimestamp() {
+    public Instant getTimestamp() {
         return timestamp;
     }
 
-    public void setTimestamp(LocalDateTime timestamp) {
+    public void setTimestamp(Instant timestamp) {
         this.timestamp = timestamp;
     }
 
@@ -90,4 +84,3 @@ public class LocationTrack {
         this.geom = geom;
     }
 }
-

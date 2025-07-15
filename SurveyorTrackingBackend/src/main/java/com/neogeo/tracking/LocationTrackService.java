@@ -1,9 +1,11 @@
 package com.neogeo.tracking;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -12,80 +14,123 @@ import com.neogeo.tracking.model.LocationTrack;
 import com.neogeo.tracking.model.Surveyor;
 import com.neogeo.tracking.repository.LocationTrackRepository;
 import com.neogeo.tracking.repository.SurveyorRepository;
+import com.neogeo.tracking.service.SurveyorService;
 
 @Service
 public class LocationTrackService {
 
-    @Autowired
-    private LocationTrackRepository locationTrackRepository;
+    private static final int OFFLINE_THRESHOLD_MINUTES = 5;
+
+    private final LocationTrackRepository locationTrackRepository;
+    private final SurveyorRepository surveyorRepository;
+    private final SurveyorService surveyorService;
 
     @Autowired
-    private SurveyorRepository surveyorRepository;
-
-    @Autowired
-    private com.neogeo.tracking.service.SurveyorService surveyorService;
-    
-    // Get surveyor online/offline status
-    public Map<String, String> getSurveyorStatuses() {
-        List<Surveyor> surveyors = surveyorRepository.findAll();
-        Map<String, String> statusMap = new HashMap<>();
-        Map<String, Boolean> activityStatusMap = surveyorService.getAllSurveyorStatuses();
-        
-        // Get the current time
-        LocalDateTime now = LocalDateTime.now();
-        LocalDateTime threshold = now.minusMinutes(5); // Consider offline if no update in 5 minutes
-        
-        for (Surveyor surveyor : surveyors) {
-            // Check both location tracking and activity tracking for better accuracy
-            LocationTrack lastLocation = getLatestLocation(surveyor.getId());
-            boolean isLocationActive = lastLocation != null && lastLocation.getTimestamp().isAfter(threshold);
-            boolean isActiveFromStatus = activityStatusMap.getOrDefault(surveyor.getId(), false);
-            
-            // Consider online if either method shows activity
-            boolean isOnline = isLocationActive || isActiveFromStatus;
-            statusMap.put(surveyor.getId(), isOnline ? "Online" : "Offline");
-        }
-        
-        return statusMap;
+    public LocationTrackService(LocationTrackRepository locationTrackRepository,
+                              SurveyorRepository surveyorRepository,
+                              SurveyorService surveyorService) {
+        this.locationTrackRepository = locationTrackRepository;
+        this.surveyorRepository = surveyorRepository;
+        this.surveyorService = surveyorService;
     }
 
-    // Get filtered surveyors
-    public List<Surveyor> filterSurveyors(String city, String project, String status) {
-        List<Surveyor> surveyors;
-        if (city != null && project != null) {
-            surveyors = surveyorRepository.findByCityAndProjectName(city, project);
-            System.out.println("Filtering by city=" + city + " AND project=" + project + " - Found: " + surveyors.size() + " surveyors");
-        } else if (city != null) {
-            surveyors = surveyorRepository.findByCity(city);
-            System.out.println("Filtering by city=" + city + " - Found: " + surveyors.size() + " surveyors");
-        } else if (project != null) {
-            surveyors = surveyorRepository.findByProjectName(project);
-            System.out.println("Filtering by project=" + project + " - Found: " + surveyors.size() + " surveyors");
-        } else {
-            surveyors = surveyorRepository.findAll();
-            System.out.println("No filters applied. Found: " + surveyors.size() + " total surveyors");
-            // Log each surveyor detail
-            for (Surveyor s : surveyors) {
-                System.out.println("Surveyor: ID=" + s.getId() + ", Name=" + s.getName() + ", City=" + s.getCity() + ", Project=" + s.getProjectName());
-            }
-        }
-        return surveyors;
+    public List<Surveyor> getAllSurveyorsExcludingAdmin() {
+        return surveyorRepository.findAll().stream()
+            .filter(this::isValidSurveyor)
+            .collect(Collectors.toList());
     }
 
-    // Get latest location
+    public Map<String, String> getSurveyorStatusesExcludingAdmin() {
+        Instant now = Instant.now();
+        Instant threshold = now.minus(OFFLINE_THRESHOLD_MINUTES, ChronoUnit.MINUTES);
+        
+        return getAllSurveyorsExcludingAdmin().stream()
+            .collect(Collectors.toMap(
+                Surveyor::getId,
+                surveyor -> determineStatus(surveyor.getId(), threshold)
+            ));
+    }
+
+    public List<Surveyor> filterSurveyorsExcludingAdmin(String city, String project, String status) {
+        List<Surveyor> surveyors = findSurveyorsByFilters(city, project);
+        return surveyors.stream()
+            .filter(this::isValidSurveyor)
+            .peek(this::logSurveyorDetails)
+            .collect(Collectors.toList());
+    }
+
     public LocationTrack getLatestLocation(String surveyorId) {
         return locationTrackRepository
-                .findTopBySurveyorIdOrderByTimestampDesc(surveyorId)
-                .orElse(null);
+            .findTopBySurveyorIdOrderByTimestampDesc(surveyorId)
+            .orElse(null);
     }
 
-    // Get location history
-    public List<LocationTrack> getTrackHistory(String surveyorId, LocalDateTime start, LocalDateTime end) {
-        if (start != null && end != null) {
-            return locationTrackRepository.findBySurveyorIdAndTimestampBetweenOrderByTimestampAsc(surveyorId, start, end);
-        } else {
-            // Only start or only end provided, fallback to full range (since repo does not support After/Before methods)
-            return locationTrackRepository.findBySurveyorIdOrderByTimestampAsc(surveyorId);
+    public List<LocationTrack> getTrackHistory(String surveyorId, Instant start, Instant end) {
+        validateTimeRange(start, end);
+        
+        List<LocationTrack> results = fetchLocationTracks(surveyorId, start, end);
+        logResults(results);
+        return results;
+    }
+
+    private boolean isValidSurveyor(Surveyor surveyor) {
+        return surveyor.getId() != null &&
+               surveyor.getId().startsWith("SUR") &&
+               !surveyor.getId().toLowerCase().contains("admin") &&
+               (surveyor.getUsername() == null || !surveyor.getUsername().toLowerCase().contains("admin"));
+    }
+
+    private String determineStatus(String surveyorId, Instant threshold) {
+        LocationTrack lastLocation = getLatestLocation(surveyorId);
+        boolean isLocationActive = lastLocation != null && 
+                                 lastLocation.getTimestamp().isAfter(threshold);
+        boolean isActiveFromStatus = surveyorService.isSurveyorOnline(surveyorId);
+        
+        return (isLocationActive || isActiveFromStatus) ? "Online" : "Offline";
+    }
+
+    private List<Surveyor> findSurveyorsByFilters(String city, String project) {
+        if (city != null && project != null) {
+            return surveyorRepository.findByCityAndProjectName(city, project);
+        } else if (city != null) {
+            return surveyorRepository.findByCity(city);
+        } else if (project != null) {
+            return surveyorRepository.findByProjectName(project);
         }
+        return surveyorRepository.findAll();
+    }
+
+    private void logSurveyorDetails(Surveyor surveyor) {
+        System.out.printf("Surveyor: ID=%s, Name=%s, City=%s, Project=%s%n",
+            surveyor.getId(), surveyor.getName(), surveyor.getCity(), surveyor.getProjectName());
+    }
+
+    private void validateTimeRange(Instant start, Instant end) {
+        if (start != null && end != null && start.isAfter(end)) {
+            throw new IllegalArgumentException("Start time must be before end time");
+        }
+    }
+
+    private List<LocationTrack> fetchLocationTracks(String surveyorId, Instant start, Instant end) {
+        if (start != null && end != null) {
+            return locationTrackRepository.findBySurveyorIdAndTimestampBetweenOrderByTimestampAsc(
+                surveyorId, start, end);
+        } else if (start != null) {
+            return locationTrackRepository.findBySurveyorIdAndTimestampAfterOrderByTimestampAsc(
+                surveyorId, start);
+        } else if (end != null) {
+            return locationTrackRepository.findBySurveyorIdAndTimestampBeforeOrderByTimestampAsc(
+                surveyorId, end);
+        }
+        return locationTrackRepository.findBySurveyorIdOrderByTimestampAsc(surveyorId);
+    }
+
+    private void logResults(List<LocationTrack> results) {
+        System.out.printf("Query returned %d records%n", results.size());
+        results.stream().limit(3).forEach(track ->
+            System.out.printf("  %s at %s -> (%.6f, %.6f)%n",
+                track.getSurveyorId(), track.getTimestamp(),
+                track.getLatitude(), track.getLongitude())
+        );
     }
 }

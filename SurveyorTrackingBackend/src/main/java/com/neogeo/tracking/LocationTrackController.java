@@ -1,6 +1,6 @@
 package com.neogeo.tracking;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -10,183 +10,129 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
-
+import org.springframework.web.bind.annotation.*;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.neogeo.tracking.dto.LiveLocationMessage;
 import com.neogeo.tracking.model.LocationTrack;
 import com.neogeo.tracking.model.Surveyor;
 import com.neogeo.tracking.repository.LocationTrackRepository;
-import com.neogeo.tracking.service.SurveyorService;
-import com.neogeo.tracking.service.TracingService;
+import com.neogeo.tracking.service.*;
 
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.media.Content;
-import io.swagger.v3.oas.annotations.media.Schema;
-import io.swagger.v3.oas.annotations.responses.ApiResponse;
-import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.*;
+import io.swagger.v3.oas.annotations.media.*;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 @RestController
 @RequestMapping("/api")
-@Tag(name = "Location Tracking", description = "APIs for tracking surveyor locations and managing location data")
+@Tag(name = "Location Tracking", description = "APIs for tracking surveyor locations")
 public class LocationTrackController {
-
-    @Autowired
-    private LocationTrackService locationTrackService;
 
     private final SimpMessagingTemplate messagingTemplate;
     private final LocationTrackRepository repository;
-    private final ObjectMapper objectMapper;
     private final SurveyorService surveyorService;
     private final TracingService tracingService;
+    private final ObjectMapper objectMapper;
+    private final LocationTrackService locationTrackService;
 
-    public LocationTrackController(SimpMessagingTemplate messagingTemplate, 
+    @Autowired
+    public LocationTrackController(SimpMessagingTemplate messagingTemplate,
                                  LocationTrackRepository repository,
                                  SurveyorService surveyorService,
-                                 TracingService tracingService) {
+                                 TracingService tracingService,
+                                 LocationTrackService locationTrackService) {
         this.messagingTemplate = messagingTemplate;
         this.repository = repository;
         this.surveyorService = surveyorService;
         this.tracingService = tracingService;
+        this.locationTrackService = locationTrackService;
         this.objectMapper = new ObjectMapper()
             .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())
             .configure(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
     }
 
-    @Operation(summary = "Filter surveyors", description = "Filter surveyors by city, project, and online status")
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Successfully retrieved filtered surveyors",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = Surveyor.class)))
-    })
+    @Operation(summary = "Filter surveyors")
     @GetMapping("/surveyors/filter")
     public List<Surveyor> filterSurveyors(
             @Parameter(description = "City to filter by") @RequestParam(required = false) String city,
             @Parameter(description = "Project to filter by") @RequestParam(required = false) String project,
-            @Parameter(description = "Online status to filter by") @RequestParam(required = false) String status
-    ) {
-        return locationTrackService.filterSurveyors(city, project, status);
+            @Parameter(description = "Online status to filter by") @RequestParam(required = false) String status) {
+        return locationTrackService.filterSurveyorsExcludingAdmin(city, project, status);
     }
 
-    @Operation(summary = "Get latest location", description = "Get the most recent location for a specific surveyor")
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Successfully retrieved latest location",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = LocationTrack.class))),
-        @ApiResponse(responseCode = "404", description = "Surveyor not found")
-    })
+    @Operation(summary = "Get latest location")
     @GetMapping("/location/{surveyorId}/latest")
     public LocationTrack getLatestLocation(
-            @Parameter(description = "ID of the surveyor", required = true) 
-            @PathVariable String surveyorId) {
+            @Parameter(description = "ID of the surveyor") @PathVariable String surveyorId) {
         return locationTrackService.getLatestLocation(surveyorId);
     }
 
-    @Operation(summary = "Get location history", description = "Get location history for a surveyor within a time range")
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Successfully retrieved location history",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = LocationTrack.class)))
-    })
+    @Operation(summary = "Get location history")
     @GetMapping("/location/{surveyorId}/track")
-    public List<LocationTrack> getTrackHistory(
-            @Parameter(description = "ID of the surveyor", required = true) 
+    public ResponseEntity<List<LocationTrack>> getTrackHistory(
             @PathVariable String surveyorId,
-            @Parameter(description = "Start time (ISO format)", example = "2025-05-30T00:00:00")
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime start,
-            @Parameter(description = "End time (ISO format)", example = "2025-05-30T23:59:59")
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime end
-    ) {
-        return locationTrackService.getTrackHistory(surveyorId, start, end);
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant start,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant end) {
+        
+        if (start.isAfter(end)) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        List<LocationTrack> tracks = locationTrackService.getTrackHistory(surveyorId, start, end);
+        return tracks.isEmpty() ? ResponseEntity.noContent().build() : ResponseEntity.ok(tracks);
     }
 
-    @Operation(summary = "Get surveyor statuses", description = "Get online/offline status for all surveyors")
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Successfully retrieved surveyor statuses")
-    })
     @GetMapping("/surveyors/status")
     public Map<String, String> getSurveyorStatus() {
-        return locationTrackService.getSurveyorStatuses();
+        return locationTrackService.getSurveyorStatusesExcludingAdmin();
     }
 
-    @Operation(summary = "Update live location", description = "Update and broadcast a surveyor's current location")
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Location update accepted"),
-        @ApiResponse(responseCode = "401", description = "Unauthorized"),
-        @ApiResponse(responseCode = "400", description = "Invalid input")
-    })
-    @PostMapping("live/location")
+    @Operation(summary = "Update live location")
+    @PostMapping("/live/location")
     public ResponseEntity<String> publishLiveLocation(
-            @Parameter(description = "Location update message", required = true)
             @RequestBody LiveLocationMessage message,
-            @Parameter(description = "Authorization header")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         
-        // Start OpenTelemetry span for GPS location tracking
-        return tracingService.traceGpsOperation("location-update", 
-            message.surveyorId, 
-            1,  // Single GPS data point
-            () -> {
-                // Simple HTTP Basic Auth check
-                if (authHeader == null || !authHeader.startsWith("Basic ")) {
-                    return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Missing or invalid Authorization header");
-                }
-                
-                try {
-                    String base64Credentials = authHeader.substring("Basic ".length());
-                    String credentials = new String(Base64.getDecoder().decode(base64Credentials));
-                    String[] values = credentials.split(":", 2);
-                    
-                    if (values.length != 2) {
-                        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid Authorization header");
-                    }
-                    
-                    String username = values[0];
-                    String password = values[1];
-                    
-                    // Use SurveyorService for authentication
-                    boolean isAuthenticated = surveyorService.authenticateSurveyor(username, password);
-                    if (!isAuthenticated) {
-                        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid username or password");
-                    }
-                    
-                    // Find the surveyor by username to get their ID
-                    Surveyor surveyor = surveyorService.findByUsername(username);
-                    if (surveyor != null) {
-                        // Update activity to mark surveyor as online
-                        surveyorService.updateSurveyorActivity(surveyor.getId());
-                    }
-                    
-                    // 1. Broadcast via WebSocket as JSON string
-                    String json = objectMapper.writeValueAsString(message);
-                    System.out.println("Broadcasting live location: " + json);
-                    messagingTemplate.convertAndSend("/topic/location/" + message.surveyorId, json);
-                    
-                    // 2. Save to DB (geom set to null to avoid PostGIS error)
-                    LocationTrack entity = new LocationTrack(message.surveyorId, message.latitude, message.longitude, message.timestamp, null);
-                    repository.save(entity);
-                    
-                    return ResponseEntity.ok("Location accepted");
-                    
-                } catch (JsonProcessingException e) {
-                    System.err.println("Error processing location data: " + e.getMessage());
-                    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error processing location data");
-                } catch (IllegalArgumentException e) {
-                    return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid Base64 encoding in Authorization header");
-                }
-            });
+        return tracingService.traceGpsOperation("location-update", message.getSurveyorId(), 1, () -> {
+            if (!validateAuth(authHeader)) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid credentials");
+            }
+
+            try {
+                broadcastLocation(message);
+                saveLocation(message);
+                return ResponseEntity.ok("Location updated");
+            } catch (JsonProcessingException e) {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Processing error");
+            }
+        });
+    }
+
+    private boolean validateAuth(String authHeader) {
+        if (authHeader == null || !authHeader.startsWith("Basic ")) return false;
+        
+        try {
+            String[] credentials = new String(Base64.getDecoder().decode(
+                authHeader.substring("Basic ".length()))).split(":", 2);
+            return credentials.length == 2 && 
+                   surveyorService.authenticateSurveyor(credentials[0], credentials[1]);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    private void broadcastLocation(LiveLocationMessage message) throws JsonProcessingException {
+        String json = objectMapper.writeValueAsString(message);
+        messagingTemplate.convertAndSend("/topic/location/" + message.getSurveyorId(), json);
+    }
+
+    private void saveLocation(LiveLocationMessage message) {
+        repository.save(new LocationTrack(
+            message.getSurveyorId(),
+            message.getLatitude(),
+            message.getLongitude(),
+            message.getTimestamp() != null ? message.getTimestamp() : Instant.now(),
+            null
+        ));
     }
 }
-
-
-
-
-
-

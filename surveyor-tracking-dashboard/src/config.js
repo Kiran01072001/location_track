@@ -24,11 +24,11 @@ const PORTS = {
 
 const config = {
   // Base URLs constructed using the port configuration
-  backendHost: `http://183.82.114.29:${PORTS.BACKEND_API}`,
-  frontendHost: `http://183.82.114.29:${PORTS.FRONTEND}`,
+  backendHost: `http://localhost:${PORTS.BACKEND_API}`,
+  frontendHost: `http://localhost:${PORTS.FRONTEND}`,
   
   // WebSocket related URLs - SockJS expects HTTP/HTTPS, not ws://
-  webSocketUrl: `http://183.82.114.29:${PORTS.BACKEND_API}/ws/location`,
+  webSocketUrl: `http://localhost:${PORTS.BACKEND_API}/ws/location`,
   
   // Export ports for direct access when needed
   ports: PORTS,

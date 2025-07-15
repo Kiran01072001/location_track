@@ -6,6 +6,7 @@ import android.view.View
 import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import com.surveyor.tracking.api.ApiClient
 import com.surveyor.tracking.databinding.ActivityLoginBinding
 import com.surveyor.tracking.viewmodel.AuthViewModel
 
@@ -48,12 +49,19 @@ class LoginActivity : AppCompatActivity() {
             }
         }
     }
-    
+    // --- Find and REPLACE this entire function ---
     private fun setupClickListeners() {
         binding.loginButton.setOnClickListener {
             val username = binding.usernameEditText.text.toString().trim()
             val password = binding.passwordEditText.text.toString().trim()
+
+            // THE FIX: Before we try to log in, we set the token in our ApiClient.
+            // This ensures the login request itself is properly authenticated.
+            ApiClient.authInterceptor.setToken(username, password)
+
+            // Now, we tell the ViewModel to perform the login.
             authViewModel.login(username, password)
         }
     }
 }
+

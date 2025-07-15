@@ -23,95 +23,101 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 @Tag(name = "Surveyor Management", description = "APIs for managing surveyors and authentication")
 public class SurveyorController {
 
-    private final SurveyorService service;
+    private final SurveyorService surveyorService;
 
-    public SurveyorController(SurveyorService service) {
-        this.service = service;
+    public SurveyorController(SurveyorService surveyorService) {
+        this.surveyorService = surveyorService;
     }
 
-    @Operation(summary = "Get all surveyors", description = "Retrieves a list of all registered surveyors")
+    @Operation(summary = "Get all surveyors", description = "Retrieves a list of all registered surveyors with online status")
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Successfully retrieved surveyors",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = Surveyor.class)))
+            content = @Content(mediaType = "application/json", 
+            schema = @Schema(implementation = Surveyor.class)))
     })
     @GetMapping
-    public List<Surveyor> getAll() {
-        List<Surveyor> surveyors = service.listAll();
-        
-        // Update the online status for each surveyor based on their last activity
-        for (Surveyor surveyor : surveyors) {
-            surveyor.setOnline(service.isSurveyorOnline(surveyor.getId()));
-        }
-        
-        return surveyors;
+    public ResponseEntity<List<Surveyor>> getAllSurveyors() {
+        List<Surveyor> surveyors = surveyorService.getAllSurveyorsWithStatus();
+        return ResponseEntity.ok(surveyors);
     }
 
-    @Operation(summary = "Create or update surveyor", description = "Creates a new surveyor or updates an existing one")
+    @Operation(summary = "Create or update surveyor", 
+              description = "Creates a new surveyor or updates an existing one. Password is hashed before storage.")
     @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Surveyor created/updated successfully",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = Surveyor.class))),
-        @ApiResponse(responseCode = "400", description = "Invalid input")
+        @ApiResponse(responseCode = "200", description = "Surveyor created/updated successfully"),
+        @ApiResponse(responseCode = "400", description = "Invalid input data")
     })
     @PostMapping
-    public Surveyor createOrUpdate(@RequestBody Surveyor surveyor) {
-        return service.save(surveyor);
+    public ResponseEntity<Surveyor> saveSurveyor(
+            @Parameter(description = "Surveyor details", required = true)
+            @RequestBody Surveyor surveyor) {
+        
+        Surveyor savedSurveyor = surveyorService.saveOrUpdateSurveyor(surveyor);
+        return ResponseEntity.ok(savedSurveyor);
     }
 
-    @Operation(summary = "Authenticate surveyor", description = "Validates surveyor credentials and returns authentication status")
+    @Operation(summary = "Authenticate surveyor", 
+              description = "Validates surveyor credentials and returns authentication status with surveyor details")
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Authentication successful"),
-        @ApiResponse(responseCode = "401", description = "Invalid credentials")
+        @ApiResponse(responseCode = "401", description = "Invalid credentials"),
+        @ApiResponse(responseCode = "404", description = "Surveyor not found")
     })
     @PostMapping("/login")
-    public ResponseEntity<?> login(
-            @Parameter(description = "Login credentials", required = true)
+    public ResponseEntity<Map<String, Object>> authenticateSurveyor(
+            @Parameter(description = "Login credentials (username and password)", required = true)
             @RequestBody Map<String, String> credentials) {
-        String username = credentials.get("username");
-        String password = credentials.get("password");
         
-        boolean isAuthenticated = service.authenticateSurveyor(username, password);
+        Map<String, Object> response = surveyorService.authenticateAndGetResponse(
+            credentials.get("username"),
+            credentials.get("password")
+        );
         
-        if (isAuthenticated) {
-            Surveyor surveyor = service.findByUsername(username);
-            // Update surveyor activity to mark them as online
-            service.updateSurveyorActivity(surveyor.getId());
-            
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "Login successful");
-            response.put("surveyor", surveyor);
-            return ResponseEntity.ok(response);
-        } else {
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
-            response.put("message", "Invalid username or password");
-            return ResponseEntity.status(401).body(response);
-        }
+        return ResponseEntity.status((int) response.get("status"))
+               .body(response);
     }
     
-    @Operation(summary = "Check username availability", description = "Checks if a username is available for registration")
+    @Operation(summary = "Check username availability", 
+              description = "Checks if a username is available for registration")
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Availability check completed")
     })
     @GetMapping("/check-username")
-    public ResponseEntity<?> checkUsernameAvailability(
+    public ResponseEntity<Map<String, Boolean>> checkUsernameAvailability(
             @Parameter(description = "Username to check", required = true)
             @RequestParam String username) {
-        boolean isAvailable = service.isUsernameAvailable(username);
-        Map<String, Object> response = new HashMap<>();
-        response.put("available", isAvailable);
-        return ResponseEntity.ok(response);
+        
+        boolean isAvailable = surveyorService.isUsernameAvailable(username);
+        return ResponseEntity.ok(Map.of("available", isAvailable));
     }
     
-    @Operation(summary = "Update surveyor activity", description = "Updates the last activity timestamp for a surveyor to mark them as online")
+    @Operation(summary = "Update surveyor activity", 
+              description = "Updates the last activity timestamp for a surveyor")
     @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Successfully updated status")
+        @ApiResponse(responseCode = "200", description = "Activity updated"),
+        @ApiResponse(responseCode = "404", description = "Surveyor not found")
     })
     @PostMapping("/{id}/activity")
-    public ResponseEntity<Void> updateSurveyorActivity(
+    public ResponseEntity<Void> updateActivity(
             @Parameter(description = "Surveyor ID", required = true)
             @PathVariable String id) {
-        service.updateSurveyorActivity(id);
+        
+        surveyorService.updateSurveyorActivity(id);
         return ResponseEntity.ok().build();
+    }
+
+    @Operation(summary = "Get surveyor status", 
+              description = "Returns the online/offline status of a surveyor")
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "200", description = "Status retrieved"),
+        @ApiResponse(responseCode = "404", description = "Surveyor not found")
+    })
+    @GetMapping("/{id}/status")
+    public ResponseEntity<Map<String, Boolean>> getSurveyorStatus(
+            @Parameter(description = "Surveyor ID", required = true)
+            @PathVariable String id) {
+        
+        boolean isOnline = surveyorService.isSurveyorOnline(id);
+        return ResponseEntity.ok(Map.of("online", isOnline));
     }
 }

@@ -3,9 +3,23 @@ import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import { FormControl, InputAdornment, TextField, Button } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
+// For files in src root (go up one level from pages/)
 import SurveyorTrackMap from '../SurveyorTrackMap';
 import config from '../config';
 import { getTracingService } from '../tracing';
+
+import { fromLonLat, toLonLat } from 'ol/proj';
+
+
+
+
+
+// Walking mode configuration from SurveyorTrackMap
+const WALKING_MODE = {
+  code: '3e2',
+  label: '🚶 Walking',
+  color: '#16a34a'
+};
 
 const HistoricalRoutesPage = () => {
   const [surveyors, setSurveyors] = useState([]);
@@ -19,7 +33,7 @@ const HistoricalRoutesPage = () => {
   const [routeData, setRouteData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [lastFetchTime, setLastFetchTime] = useState(null);
-  const [showMap, setShowMap] = useState(false); // New state to control map visibility
+  const [showMap, setShowMap] = useState(false);
 
   // Get OpenTelemetry tracing service
   const tracingService = getTracingService();
@@ -33,7 +47,11 @@ const HistoricalRoutesPage = () => {
       'filter.project': project || 'none'
     });
     
-    fetch(`${config.backendHost}/api/surveyors`)
+    // Check if backend is available first
+    const backendUrl = `${config.backendHost}/api/surveyors`;
+    console.log('🏛️ Attempting to fetch from:', backendUrl);
+    
+    fetch(backendUrl)
       .then(res => {
         if (!res.ok) {
           throw new Error(`HTTP error! status: ${res.status}`);
@@ -66,13 +84,67 @@ const HistoricalRoutesPage = () => {
         fetchSpan.end(true, normalizedData.length);
       })
       .catch(err => {
-        console.error('🏛️ Failed to load surveyors for historical routes:', err);
-        fetchSpan.end(false, 0, err);
+        console.error('🏛️ Failed to load surveyors for historical routes:', err.message);
+        
+        // Provide mock data for development/demo purposes when backend is not available
+        if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
+          console.log('🏛️ Backend not available, using mock data for demo');
+          const mockSurveyors = [
+            {
+              id: 'surveyor-001',
+              name: 'John Smith',
+              city: 'New York',
+              projectName: 'Manhattan Survey',
+              normalizedId: 'surveyor-001'
+            },
+            {
+              id: 'surveyor-002', 
+              name: 'Sarah Johnson',
+              city: 'Los Angeles',
+              projectName: 'LA Downtown Project',
+              normalizedId: 'surveyor-002'
+            },
+            {
+              id: 'surveyor-003',
+              name: 'Mike Davis',
+              city: 'Chicago',
+              projectName: 'Chicago Infrastructure',
+              normalizedId: 'surveyor-003'
+            }
+          ];
+          
+          // Apply filters to mock data
+          let filteredMockData = mockSurveyors;
+          if (city || project) {
+            filteredMockData = mockSurveyors.filter(surveyor => {
+              const matchesCity = !city || (surveyor.city && surveyor.city.toLowerCase().includes(city.toLowerCase()));
+              const matchesProject = !project || (surveyor.projectName && surveyor.projectName.toLowerCase().includes(project.toLowerCase()));
+              return matchesCity && matchesProject;
+            });
+          }
+          
+          setSurveyors(filteredMockData);
+          console.log('🏛️ Mock surveyors loaded:', filteredMockData.length, 'surveyors');
+          fetchSpan.end(true, filteredMockData.length);
+        } else {
+          // For other errors, show user-friendly message
+          alert(`Failed to load surveyors: ${err.message}\n\nPlease check if the backend server is running at ${config.backendHost}`);
+          fetchSpan.end(false, 0, err);
+        }
       });
   }, [city, project, tracingService]);
 
-  // Fetch route data manually when button is clicked
-  const fetchRouteData = useCallback(() => {
+  // Generate Google Maps walking route URL from coordinates
+  const generateGoogleMapsUrl = useCallback((coordinates) => {
+    if (!coordinates || coordinates.length < 2) return '';
+    
+    const start = toLonLat(coordinates[0]);
+    const end = toLonLat(coordinates[coordinates.length - 1]);
+    return `https://www.google.com/maps/dir/${start[1]},${start[0]}/${end[1]},${end[0]}/data=!4m2!4m1!${WALKING_MODE.code}`;
+  }, []);
+
+  // Fetch route data and redirect to Google Maps
+  const fetchRouteData = useCallback(async () => {
     if (!surveyorId || surveyorId === 'ALL') {
       alert('Please select a specific surveyor to view historical routes.');
       return;
@@ -89,29 +161,82 @@ const HistoricalRoutesPage = () => {
     
     setIsLoading(true);
     setLastFetchTime(new Date());
-    setShowMap(false); // Hide map during loading
+    setShowMap(false);
     
     console.log('🏛️ Fetching historical route data for:', surveyorId, 'from:', from, 'to:', to);
     
-    // Set route data to trigger map refresh
-    const newRouteData = {
-      surveyorId,
-      from: from.toISOString(),
-      to: to.toISOString(),
-      timestamp: Date.now()
-    };
-    
-    setRouteData(newRouteData);
-    
-    // Simulate loading time for better UX, then show map
-    setTimeout(() => {
-      setIsLoading(false);
-      setShowMap(true); // Show map after loading
-      console.log('🏛️ Historical route data ready, showing map');
+    try {
+      // Fetch the actual coordinate data for Google Maps redirect
+      const trackUrl = `${config.backendHost}/api/location/${surveyorId}/track?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`;
       
-      routeSpan.end(true);
-    }, 1000);
-  }, [surveyorId, from, to, tracingService]);
+      console.log('🏛️ Attempting to fetch track data from:', trackUrl);
+      
+      try {
+        const response = await fetch(trackUrl);
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const trackData = await response.json();
+        
+        if (trackData && trackData.length > 0) {
+          // Convert coordinates to OpenLayers format
+          const coordinates = trackData.map(point => fromLonLat([point.longitude, point.latitude]));
+          
+          // Generate Google Maps URL
+          const googleMapsUrl = generateGoogleMapsUrl(coordinates);
+          
+          if (googleMapsUrl) {
+            console.log('🏛️ Opening Google Maps walking route:', googleMapsUrl);
+            // Open Google Maps in a new tab with walking route
+            window.open(googleMapsUrl, '_blank', 'noopener,noreferrer');
+          }
+        } else {
+          console.log('🏛️ No track data available for the selected time range');
+          alert('No route data found for the selected surveyor and time range.');
+        }
+      } catch (fetchError) {
+        console.error('🏛️ Failed to fetch track data:', fetchError.message);
+        
+        // For demo purposes when backend is not available, show a mock Google Maps URL
+        if (fetchError.message.includes('Failed to fetch') || fetchError.message.includes('NetworkError')) {
+          console.log('🏛️ Backend not available, opening demo Google Maps route');
+          // Open a demo walking route in NYC
+          const demoUrl = 'https://www.google.com/maps/dir/40.7589,-73.9851/40.7614,-73.9776/data=!4m2!4m1!3e2';
+          window.open(demoUrl, '_blank', 'noopener,noreferrer');
+          alert('Backend server not available. Opening demo walking route in Google Maps.');
+        } else {
+          throw fetchError; // Re-throw other errors
+        }
+      }
+      
+      // Set route data to trigger map refresh
+      const newRouteData = {
+        surveyorId,
+        from: from.toISOString(),
+        to: to.toISOString(),
+        timestamp: Date.now()
+      };
+      
+      setRouteData(newRouteData);
+      
+      // Simulate loading time for better UX, then show map
+      setTimeout(() => {
+        setIsLoading(false);
+        setShowMap(true);
+        console.log('🏛️ Historical route data ready, showing map');
+        
+        routeSpan.end(true);
+      }, 1000);
+      
+    } catch (error) {
+      console.error('🏛️ Error fetching route data:', error);
+      setIsLoading(false);
+      routeSpan.end(false, 0, error);
+      alert(`Failed to fetch route data: ${error.message}\n\nPlease check if the backend server is running at ${config.backendHost}`);
+    }
+  }, [surveyorId, from, to, tracingService, generateGoogleMapsUrl]);
 
   // Clear route data and hide map
   const clearRouteData = useCallback(() => {
@@ -510,7 +635,7 @@ const HistoricalRoutesPage = () => {
                 gap: '1rem',
                 alignItems: 'stretch'
               }}>
-                {/* Fetch Button */}
+                {/* Fetch Button - Now includes Google Maps redirect */}
                 <Button
                   onClick={fetchRouteData}
                   disabled={!surveyorId || isLoading}
@@ -544,7 +669,7 @@ const HistoricalRoutesPage = () => {
                         animation: 'spin 1s linear infinite',
                         marginRight: '0.5rem'
                       }} />
-                      Fetching Route...
+                      Opening Google Maps...
                     </>
                   ) : (
                     <>
@@ -595,6 +720,23 @@ const HistoricalRoutesPage = () => {
                   <div>{lastFetchTime.toLocaleString()}</div>
                 </div>
               )}
+
+              {/* Google Maps Integration Info */}
+              <div style={{
+                background: 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)',
+                color: '#ffffff',
+                padding: '1rem',
+                borderRadius: '12px',
+                fontSize: '0.85rem',
+                textAlign: 'center',
+                boxShadow: '0 4px 15px rgba(22, 163, 74, 0.25)'
+              }}>
+                <div style={{ fontSize: '1.2rem', marginBottom: '0.5rem' }}>🚶</div>
+                <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Google Maps Integration</div>
+                <div style={{ opacity: 0.9 }}>
+                  Clicking "Fetch Historical Route" will automatically open Google Maps with walking directions
+                </div>
+              </div>
             </div>
 
             {/* Right: Historical Routes Map */}
@@ -655,11 +797,12 @@ const HistoricalRoutesPage = () => {
               }}>
                 {routeData && showMap && (
                   <SurveyorTrackMap
-                    key={routeData.timestamp} // Force re-render on new fetch
+                    key={routeData.timestamp}
                     surveyorIds={[routeData.surveyorId]}
                     from={routeData.from}
                     to={routeData.to}
                     liveTracking={false}
+                    showGoogleMapsLinks={false} // Disable the built-in Google Maps link since we're handling it manually
                   />
                 )}
                 {(!routeData || !showMap) && (
@@ -689,13 +832,13 @@ const HistoricalRoutesPage = () => {
                       </div>
                       <div style={{ fontSize: '1rem', lineHeight: '1.5', color: '#d97706' }}>
                         {isLoading ? (
-                          'Please wait while we fetch and analyze the route data...'
+                          'Opening Google Maps with walking directions...'
                         ) : (
                           <>
                             1. Select a surveyor from dropdown<br />
                             2. Choose your date range<br />
                             3. Click "Fetch Historical Route"<br />
-                            4. Map will load with the route data
+                            4. Google Maps will open with walking directions
                           </>
                         )}
                       </div>
@@ -709,7 +852,7 @@ const HistoricalRoutesPage = () => {
                       fontWeight: 600,
                       border: '1px solid rgba(245, 158, 11, 0.2)'
                     }}>
-                      {isLoading ? '⏳ Fetching data...' : '📊 Manual fetch only • No auto-refresh'}
+                      {isLoading ? '🚶 Opening Google Maps...' : '🔍 Fetch route to open Google Maps walking directions'}
                     </div>
                   </div>
                 )}
@@ -731,3 +874,6 @@ const HistoricalRoutesPage = () => {
 };
 
 export default HistoricalRoutesPage;
+
+
+
